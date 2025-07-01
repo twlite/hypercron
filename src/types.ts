@@ -36,6 +36,28 @@ export interface CronServiceConfig {
   refreshInterval?: number;
   /** Look-ahead window in milliseconds for job scheduling (default: 25 hours) */
   lookAheadWindow?: number;
+  /** Auto-cleanup configuration for automatic job cleanup */
+  autoCleanup?: {
+    /** Enable automatic cleanup (default: true) */
+    enabled?: boolean;
+    /** Interval in milliseconds for cleanup runs (default: 24 hours) */
+    interval?: number;
+    /** Remove completed jobs older than this many days (default: 7) */
+    completedJobsRetentionDays?: number;
+    /** Remove cancelled jobs older than this many days (default: 30) */
+    cancelledJobsRetentionDays?: number;
+  };
+  /** Job retry configuration for failed executions */
+  retry?: {
+    /** Maximum number of retry attempts (default: 3) */
+    maxAttempts?: number;
+    /** Base delay in milliseconds for exponential backoff (default: 1000) */
+    baseDelay?: number;
+    /** Maximum delay in milliseconds (default: 30000) */
+    maxDelay?: number;
+  };
+  /** Error handling configuration */
+  onError?: (jobId: string, error: Error) => void;
 }
 
 /**

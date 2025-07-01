@@ -24,6 +24,19 @@ export class SqliteDriver implements Driver {
   private isRunning = false;
   public isInitialized = false;
 
+  // Auto-cleanup properties
+  private autoCleanupEnabled: boolean;
+  private autoCleanupInterval: number;
+  private completedJobsRetentionDays: number;
+  private cancelledJobsRetentionDays: number;
+  private autoCleanupTimer: NodeJS.Timeout | null = null;
+
+  // Retry configuration
+  private maxRetryAttempts: number;
+  private retryBaseDelay: number;
+  private retryMaxDelay: number;
+  private onErrorHandler?: (jobId: string, error: Error) => void;
+
   /**
    * Create a new SQLite driver instance.
    * @param config - Configuration options for the driver
@@ -32,6 +45,21 @@ export class SqliteDriver implements Driver {
     this.chunkSize = config.chunkSize || 1000;
     this.refreshInterval = config.refreshInterval || 24 * 60 * 60 * 1000;
     this.lookAheadWindow = config.lookAheadWindow || 25 * 60 * 60 * 1000;
+
+    // Initialize auto-cleanup settings
+    this.autoCleanupEnabled = config.autoCleanup?.enabled ?? true;
+    this.autoCleanupInterval =
+      config.autoCleanup?.interval ?? 24 * 60 * 60 * 1000;
+    this.completedJobsRetentionDays =
+      config.autoCleanup?.completedJobsRetentionDays ?? 7;
+    this.cancelledJobsRetentionDays =
+      config.autoCleanup?.cancelledJobsRetentionDays ?? 30;
+
+    // Initialize retry settings
+    this.maxRetryAttempts = config.retry?.maxAttempts ?? 3;
+    this.retryBaseDelay = config.retry?.baseDelay ?? 1000;
+    this.retryMaxDelay = config.retry?.maxDelay ?? 30000;
+    this.onErrorHandler = config.onError;
   }
 
   /**
@@ -55,6 +83,9 @@ export class SqliteDriver implements Driver {
    */
   public async destroy(): Promise<void> {
     await this.stop();
+
+    // Ensure auto-cleanup is stopped
+    this.stopAutoCleanup();
 
     if (this.db) {
       this.db.close();
@@ -125,7 +156,6 @@ export class SqliteDriver implements Driver {
           nextRun,
         };
       } catch (error) {
-        console.error(error);
         throw new Error(`Invalid cron expression: ${input}`);
       }
     } else {
@@ -394,6 +424,11 @@ export class SqliteDriver implements Driver {
     return stats;
   }
 
+  /**
+   * Clean up old cancelled jobs that are older than the specified number of days.
+   * @param olderThanDays - Number of days after which cancelled jobs should be removed (default: 30)
+   * @returns Number of jobs that were removed
+   */
   public async cleanupOldJobs(olderThanDays: number = 30): Promise<number> {
     await this.ensureDatabase();
 
@@ -404,6 +439,156 @@ export class SqliteDriver implements Driver {
     `);
     const result = stmt.run(cutoff);
     return Number(result.changes);
+  }
+
+  /**
+   * Clean up completed jobs that are older than the specified number of days.
+   * @param olderThanDays - Number of days after which completed jobs should be removed (default: 7)
+   * @returns Number of jobs that were removed
+   */
+  public async cleanupCompletedJobs(
+    olderThanDays: number = 7
+  ): Promise<number> {
+    await this.ensureDatabase();
+
+    const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+    const stmt = this.db.prepare(/* sql */ `
+      DELETE FROM cron_jobs 
+      WHERE status = 'completed' AND updated_at < ?
+    `);
+    const result = stmt.run(cutoff);
+    return Number(result.changes);
+  }
+
+  /**
+   * Clean up both completed and cancelled jobs that are older than the specified number of days.
+   * @param completedOlderThanDays - Number of days after which completed jobs should be removed (default: 7)
+   * @param cancelledOlderThanDays - Number of days after which cancelled jobs should be removed (default: 30)
+   * @returns Object containing the number of completed and cancelled jobs that were removed
+   */
+  public async cleanupAllOldJobs(
+    completedOlderThanDays: number = 7,
+    cancelledOlderThanDays: number = 30
+  ): Promise<{ completed: number; cancelled: number }> {
+    await this.ensureDatabase();
+
+    const completedCutoff =
+      Date.now() - completedOlderThanDays * 24 * 60 * 60 * 1000;
+    const cancelledCutoff =
+      Date.now() - cancelledOlderThanDays * 24 * 60 * 60 * 1000;
+
+    const completedStmt = this.db.prepare(/* sql */ `
+      DELETE FROM cron_jobs 
+      WHERE status = 'completed' AND updated_at < ?
+    `);
+    const completedResult = completedStmt.run(completedCutoff);
+
+    const cancelledStmt = this.db.prepare(/* sql */ `
+      DELETE FROM cron_jobs 
+      WHERE status = 'cancelled' AND updated_at < ?
+    `);
+    const cancelledResult = cancelledStmt.run(cancelledCutoff);
+
+    return {
+      completed: Number(completedResult.changes),
+      cancelled: Number(cancelledResult.changes),
+    };
+  }
+
+  /**
+   * Perform automatic cleanup based on configured retention settings.
+   * This method is called periodically when auto-cleanup is enabled.
+   * @returns Object containing the number of completed and cancelled jobs that were removed
+   */
+  private async performAutoCleanup(): Promise<{
+    completed: number;
+    cancelled: number;
+  }> {
+    try {
+      const result = await this.cleanupAllOldJobs(
+        this.completedJobsRetentionDays,
+        this.cancelledJobsRetentionDays
+      );
+
+      // Auto-cleanup completed silently
+
+      return result;
+    } catch (error) {
+      // Auto-cleanup error handled silently
+      return { completed: 0, cancelled: 0 };
+    }
+  }
+
+  /**
+   * Start the automatic cleanup timer if enabled.
+   */
+  private startAutoCleanup(): void {
+    if (!this.autoCleanupEnabled || this.autoCleanupTimer) {
+      return;
+    }
+
+    this.autoCleanupTimer = setInterval(async () => {
+      await this.performAutoCleanup();
+    }, this.autoCleanupInterval);
+  }
+
+  /**
+   * Stop the automatic cleanup timer.
+   */
+  private stopAutoCleanup(): void {
+    if (this.autoCleanupTimer) {
+      clearInterval(this.autoCleanupTimer);
+      this.autoCleanupTimer = null;
+    }
+  }
+
+  /**
+   * Manually trigger auto-cleanup with current settings.
+   * @returns Object containing the number of completed and cancelled jobs that were removed
+   */
+  public async triggerAutoCleanup(): Promise<{
+    completed: number;
+    cancelled: number;
+  }> {
+    return this.performAutoCleanup();
+  }
+
+  /**
+   * Get auto-cleanup configuration and status.
+   * @returns Object containing auto-cleanup settings and current status
+   */
+  public getAutoCleanupStatus(): {
+    enabled: boolean;
+    interval: number;
+    completedJobsRetentionDays: number;
+    cancelledJobsRetentionDays: number;
+    isRunning: boolean;
+  } {
+    return {
+      enabled: this.autoCleanupEnabled,
+      interval: this.autoCleanupInterval,
+      completedJobsRetentionDays: this.completedJobsRetentionDays,
+      cancelledJobsRetentionDays: this.cancelledJobsRetentionDays,
+      isRunning: this.autoCleanupTimer !== null,
+    };
+  }
+
+  /**
+   * Get retry configuration and error handling status.
+   * @returns Object containing retry settings and error handler status
+   */
+  public getRetryConfig(): {
+    maxAttempts: number;
+    baseDelay: number;
+    maxDelay: number;
+    hasErrorHandler: boolean;
+  } {
+    return {
+      maxAttempts: this.maxRetryAttempts,
+      baseDelay: this.retryBaseDelay,
+      maxDelay: this.retryMaxDelay,
+      hasErrorHandler: this.onErrorHandler !== undefined,
+    };
   }
 
   private scheduleJobExecution(identifier: string, nextRun: number): void {
@@ -425,65 +610,98 @@ export class SqliteDriver implements Driver {
   }
 
   private async executeJob(identifier: string): Promise<void> {
-    try {
-      const handler = this.handlers.get(identifier);
-      if (!handler) {
-        console.warn(`No handler found for job: ${identifier}`);
-        return;
-      }
+    const handler = this.handlers.get(identifier);
+    if (!handler) {
+      return;
+    }
 
-      await handler();
+    let lastError: Error | null = null;
 
-      const stmt = this.db.prepare(/* sql */ `
-        SELECT cron_expression, specific_time, run_count FROM cron_jobs 
-        WHERE identifier = ? AND status = 'active'
-      `);
-      const job = stmt.get(identifier) as
-        | {
-            cron_expression: string | null;
-            specific_time: number | null;
-            run_count: number;
-          }
-        | undefined;
+    // Try to execute the job with retries
+    for (let attempt = 1; attempt <= this.maxRetryAttempts; attempt++) {
+      try {
+        await handler();
+        lastError = null;
+        break; // Success, exit retry loop
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
 
-      if (job) {
-        const now = Date.now();
-        let nextRun: number | null = null;
-        let newStatus = 'active';
-
-        if (job.cron_expression) {
-          nextRun = this.calculateNextRun(job.cron_expression);
-        } else if (job.specific_time) {
-          newStatus = 'completed';
-          nextRun = job.specific_time;
+        // If this is the last attempt, don't retry
+        if (attempt === this.maxRetryAttempts) {
+          break;
         }
 
-        const updateStmt = this.db.prepare(/* sql */ `
-          UPDATE cron_jobs 
-          SET last_run = ?, next_run = ?, run_count = ?, status = ?, updated_at = ?
-          WHERE identifier = ?
-        `);
-        updateStmt.run(
-          now,
-          nextRun,
-          job.run_count + 1,
-          newStatus,
-          now,
-          identifier
+        // Calculate delay for exponential backoff
+        const delay = Math.min(
+          this.retryBaseDelay * Math.pow(2, attempt - 1),
+          this.retryMaxDelay
         );
 
-        if (
-          job.cron_expression &&
-          nextRun &&
-          nextRun <= Date.now() + this.lookAheadWindow
-        ) {
-          this.scheduleJobExecution(identifier, nextRun);
-        } else {
-          this.activeJobs.delete(identifier);
-        }
+        // Wait before retrying
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
-    } catch (error) {
-      console.error(`Error executing cron job ${identifier}:`, error);
+    }
+
+    // If all attempts failed, handle the error
+    if (lastError) {
+      if (this.onErrorHandler) {
+        this.onErrorHandler(identifier, lastError);
+      } else {
+        // Default error handling: log to stdout
+        process.stdout.write(
+          `Job execution failed after ${this.maxRetryAttempts} attempts: ${identifier} - ${lastError.message}\n`
+        );
+      }
+    }
+
+    // Update job status regardless of success/failure
+    const stmt = this.db.prepare(/* sql */ `
+      SELECT cron_expression, specific_time, run_count FROM cron_jobs 
+      WHERE identifier = ? AND status = 'active'
+    `);
+    const job = stmt.get(identifier) as
+      | {
+          cron_expression: string | null;
+          specific_time: number | null;
+          run_count: number;
+        }
+      | undefined;
+
+    if (job) {
+      const now = Date.now();
+      let nextRun: number | null = null;
+      let newStatus = 'active';
+
+      if (job.cron_expression) {
+        nextRun = this.calculateNextRun(job.cron_expression);
+      } else if (job.specific_time) {
+        newStatus = 'completed';
+        nextRun = job.specific_time;
+      }
+
+      const updateStmt = this.db.prepare(/* sql */ `
+        UPDATE cron_jobs 
+        SET last_run = ?, next_run = ?, run_count = ?, status = ?, updated_at = ?
+        WHERE identifier = ?
+      `);
+      updateStmt.run(
+        now,
+        nextRun,
+        job.run_count + 1,
+        newStatus,
+        now,
+        identifier
+      );
+
+      if (
+        job.cron_expression &&
+        nextRun &&
+        nextRun <= Date.now() + this.lookAheadWindow
+      ) {
+        this.scheduleJobExecution(identifier, nextRun);
+      } else {
+        this.activeJobs.delete(identifier);
+      }
     }
   }
 
@@ -536,6 +754,9 @@ export class SqliteDriver implements Driver {
         await this.loadAndScheduleChunk();
       }, this.refreshInterval);
     }
+
+    // Start auto-cleanup if enabled
+    this.startAutoCleanup();
   }
 
   /**
@@ -550,6 +771,9 @@ export class SqliteDriver implements Driver {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
     }
+
+    // Stop auto-cleanup
+    this.stopAutoCleanup();
 
     for (const [identifier, timeout] of this.activeJobs) {
       clearTimeout(timeout);

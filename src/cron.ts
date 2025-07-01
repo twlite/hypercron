@@ -171,6 +171,76 @@ export class CronService {
   }
 
   /**
+   * Remove old completed jobs from the database.
+   * @param olderThanDays - Remove jobs older than this many days (default: 7)
+   * @returns Promise resolving to the number of jobs removed
+   */
+  public async cleanupCompletedJobs(olderThanDays?: number) {
+    await this.ensureDriverInitialized();
+    return this.driver.cleanupCompletedJobs(olderThanDays);
+  }
+
+  /**
+   * Remove both old completed and cancelled jobs from the database.
+   * @param completedOlderThanDays - Remove completed jobs older than this many days (default: 7)
+   * @param cancelledOlderThanDays - Remove cancelled jobs older than this many days (default: 30)
+   * @returns Promise resolving to object with counts of removed jobs
+   */
+  public async cleanupAllOldJobs(
+    completedOlderThanDays?: number,
+    cancelledOlderThanDays?: number
+  ) {
+    await this.ensureDriverInitialized();
+    return this.driver.cleanupAllOldJobs(
+      completedOlderThanDays,
+      cancelledOlderThanDays
+    );
+  }
+
+  /**
+   * Manually trigger auto-cleanup with current settings.
+   * @returns Promise resolving to object with counts of removed jobs
+   */
+  public async triggerAutoCleanup() {
+    await this.ensureDriverInitialized();
+    return this.driver.triggerAutoCleanup();
+  }
+
+  /**
+   * Get auto-cleanup configuration and status.
+   * @returns Object containing auto-cleanup settings and current status
+   */
+  public getAutoCleanupStatus() {
+    return this.driver.getAutoCleanupStatus();
+  }
+
+  /**
+   * Get retry configuration and error handling status.
+   * @returns Object containing retry settings and error handler status
+   */
+  public getRetryConfig() {
+    return this.driver.getRetryConfig();
+  }
+
+  /**
+   * Initialize the cron service and its underlying driver.
+   * This method should be called before using the service.
+   */
+  public async init() {
+    await this.ensureDriverInitialized();
+  }
+
+  /**
+   * Clean up resources and destroy the underlying driver.
+   * This method should be called when the service is no longer needed.
+   */
+  public async destroy() {
+    if (this.driver) {
+      await this.driver.destroy?.();
+    }
+  }
+
+  /**
    * Start the cron service and begin processing jobs.
    * This method should be called to begin automatic job execution.
    */

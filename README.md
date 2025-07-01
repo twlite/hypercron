@@ -8,7 +8,9 @@ A comprehensive cron job management system with persistent storage and automatic
 - **Persistent Storage**: SQLite-based storage with automatic job recovery
 - **Job Lifecycle Management**: Active, paused, cancelled, and completed states
 - **Automatic Execution**: Jobs run automatically at scheduled times
-- **Error Handling**: Robust error handling and logging
+- **Retry Mechanism**: Exponential backoff retry with configurable attempts
+- **Error Handling**: Custom error handlers and robust error management
+- **Auto-Cleanup**: Automatic cleanup of old completed and cancelled jobs
 - **Performance Optimization**: Chunked loading and efficient queries
 - **Monitoring & Statistics**: Comprehensive job tracking and metrics
 - **TypeScript Support**: Full type safety throughout
@@ -16,7 +18,7 @@ A comprehensive cron job management system with persistent storage and automatic
 ## Installation
 
 ```bash
-npm install hypercron
+npm i hypercron
 ```
 
 **Note**: This library uses `cron-parser` for parsing cron expressions, which is included as a dependency.
@@ -101,6 +103,178 @@ const runCount = await cronService.getJobRunCount('daily-backup');
 const totalRuns = await cronService.getTotalRunsCount();
 ```
 
+### Auto-Cleanup
+
+HyperCron includes automatic cleanup functionality to manage database size by removing old completed and cancelled jobs.
+
+#### Default Auto-Cleanup
+
+Auto-cleanup is enabled by default with the following settings:
+
+- **Interval**: 24 hours
+- **Completed Jobs Retention**: 7 days
+- **Cancelled Jobs Retention**: 30 days
+
+```typescript
+import { cronService } from 'hypercron';
+
+// Auto-cleanup runs automatically when the service is started
+await cronService.start();
+
+// Check auto-cleanup status
+const status = cronService.getAutoCleanupStatus();
+console.log(status);
+// {
+//   enabled: true,
+//   interval: 86400000,
+//   completedJobsRetentionDays: 7,
+//   cancelledJobsRetentionDays: 30,
+//   isRunning: true
+// }
+```
+
+#### Custom Auto-Cleanup Configuration
+
+```typescript
+import { CronService, SqliteDriver } from 'hypercron';
+
+const driver = new SqliteDriver({
+  db: 'custom-cron.db',
+  autoCleanup: {
+    enabled: true,
+    interval: 12 * 60 * 60 * 1000, // 12 hours
+    completedJobsRetentionDays: 3, // Keep completed jobs for 3 days
+    cancelledJobsRetentionDays: 7, // Keep cancelled jobs for 7 days
+  },
+});
+
+const customService = new CronService(driver);
+await customService.start();
+```
+
+#### Manual Cleanup
+
+```typescript
+import { cronService } from 'hypercron';
+
+// Manually trigger cleanup with current settings
+const result = await cronService.triggerAutoCleanup();
+console.log(result);
+// { completed: 5, cancelled: 2 }
+
+// Manual cleanup with custom retention periods
+const customResult = await cronService.cleanupAllOldJobs(1, 5);
+console.log(customResult);
+// { completed: 10, cancelled: 3 }
+```
+
+#### Disable Auto-Cleanup
+
+```typescript
+import { CronService, SqliteDriver } from 'hypercron';
+
+const driver = new SqliteDriver({
+  db: 'no-cleanup.db',
+  autoCleanup: {
+    enabled: false,
+  },
+});
+
+const service = new CronService(driver);
+await service.start();
+```
+
+### Retry and Error Handling
+
+HyperCron includes configurable retry logic with exponential backoff for failed job executions.
+
+#### Default Retry Configuration
+
+By default, jobs will retry up to 3 times with exponential backoff:
+
+- **Base Delay**: 1 second
+- **Max Delay**: 30 seconds
+- **Max Attempts**: 3
+
+```typescript
+import { cronService } from 'hypercron';
+
+// Jobs automatically retry on failure
+await cronService.schedule('* * * * *', 'retry-job', async () => {
+  // This job will retry up to 3 times if it fails
+  await riskyOperation();
+});
+
+// Check retry configuration
+const retryConfig = cronService.getRetryConfig();
+console.log(retryConfig);
+// {
+//   maxAttempts: 3,
+//   baseDelay: 1000,
+//   maxDelay: 30000,
+//   hasErrorHandler: false
+// }
+```
+
+#### Custom Retry Configuration
+
+```typescript
+import { CronService, SqliteDriver } from 'hypercron';
+
+const driver = new SqliteDriver({
+  db: 'custom-retry.db',
+  retry: {
+    maxAttempts: 5,
+    baseDelay: 500, // 500ms base delay
+    maxDelay: 10000, // 10 second max delay
+  },
+});
+
+const customService = new CronService(driver);
+await customService.start();
+```
+
+#### Custom Error Handling
+
+```typescript
+import { CronService, SqliteDriver } from 'hypercron';
+
+const driver = new SqliteDriver({
+  db: 'error-handler.db',
+  retry: {
+    maxAttempts: 3,
+    baseDelay: 1000,
+    maxDelay: 5000,
+  },
+  onError: (jobId: string, error: Error) => {
+    // Custom error handling
+    console.error(`Job ${jobId} failed:`, error.message);
+    // Send to monitoring service, log to file, etc.
+  },
+});
+
+const service = new CronService(driver);
+await service.start();
+```
+
+#### Disable Retries
+
+```typescript
+import { CronService, SqliteDriver } from 'hypercron';
+
+const driver = new SqliteDriver({
+  db: 'no-retry.db',
+  retry: {
+    maxAttempts: 1, // No retries
+  },
+});
+
+const service = new CronService(driver);
+await service.start();
+```
+
+````
+
 ### Custom Configuration
 
 ```typescript
@@ -119,7 +293,7 @@ const customService = new CronService(driver);
 
 // Initialize and start
 await customService.start();
-```
+````
 
 ## API Reference
 
@@ -148,6 +322,11 @@ new CronService(driver: Driver)
 - `getJobsInWindow()` - Get jobs in execution window
 - `getJobStats()` - Get comprehensive statistics
 - `cleanupOldJobs(olderThanDays?)` - Remove old cancelled jobs
+- `cleanupCompletedJobs(olderThanDays?)` - Remove old completed jobs
+- `cleanupAllOldJobs(completedOlderThanDays?, cancelledOlderThanDays?)` - Remove both old completed and cancelled jobs
+- `triggerAutoCleanup()` - Manually trigger auto-cleanup with current settings
+- `getAutoCleanupStatus()` - Get auto-cleanup configuration and status
+- `getRetryConfig()` - Get retry configuration and error handler status
 - `start()` - Start the service
 - `stop()` - Stop the service
 - `setDriver(driver)` - Change the underlying driver
@@ -168,6 +347,16 @@ new SqliteDriver(config: CronServiceConfig)
 - `chunkSize` (number, optional) - Maximum jobs per chunk (default: 1000)
 - `refreshInterval` (number, optional) - Refresh interval in ms (default: 24 hours)
 - `lookAheadWindow` (number, optional) - Look-ahead window in ms (default: 25 hours)
+- `autoCleanup` (object, optional) - Auto-cleanup configuration
+  - `enabled` (boolean, optional) - Enable auto-cleanup (default: true)
+  - `interval` (number, optional) - Cleanup interval in ms (default: 24 hours)
+  - `completedJobsRetentionDays` (number, optional) - Days to keep completed jobs (default: 7)
+  - `cancelledJobsRetentionDays` (number, optional) - Days to keep cancelled jobs (default: 30)
+- `retry` (object, optional) - Retry configuration
+  - `maxAttempts` (number, optional) - Maximum retry attempts (default: 3)
+  - `baseDelay` (number, optional) - Base delay in ms for exponential backoff (default: 1000)
+  - `maxDelay` (number, optional) - Maximum delay in ms (default: 30000)
+- `onError` (function, optional) - Custom error handler function
 
 #### Methods
 

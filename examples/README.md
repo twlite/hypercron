@@ -100,12 +100,60 @@ npx tsx examples/extreme-load-test.ts
 
 **⚠️ Warning:** The extreme load test requires significant system resources and may take a long time to complete. Make sure you have sufficient RAM and disk space.
 
+### 7. Cleanup Example (`cleanup-example.ts`)
+
+Demonstrates the cleanup functionality for managing job history:
+
+- Cleaning up completed jobs
+- Cleaning up cancelled jobs
+- Combined cleanup operations
+- Job statistics before and after cleanup
+- Automatic database maintenance
+
+**Run with:**
+
+```bash
+npx tsx examples/cleanup-example.ts
+```
+
+### 8. Auto-Cleanup Example (`auto-cleanup-example.ts`)
+
+Demonstrates the automatic cleanup functionality with different configurations:
+
+- Default auto-cleanup settings (enabled by default)
+- Custom auto-cleanup intervals and retention periods
+- Disabled auto-cleanup with manual triggers
+- Real-time auto-cleanup monitoring
+- Auto-cleanup status and configuration
+
+**Run with:**
+
+```bash
+npx tsx examples/auto-cleanup-example.ts
+```
+
+### 9. Retry Example (`retry-example.ts`)
+
+Demonstrates the retry functionality with exponential backoff and error handling:
+
+- Default retry configuration (3 attempts with exponential backoff)
+- Custom retry settings with different attempt counts and delays
+- Custom error handlers for failed job executions
+- No retry configuration for immediate failure
+- Exponential backoff timing demonstration
+
+**Run with:**
+
+```bash
+npx tsx examples/retry-example.ts
+```
+
 ## Prerequisites
 
 Make sure you have the required dependencies installed:
 
 ```bash
-npm install
+pnpm install
 ```
 
 ## Running Examples
@@ -145,5 +193,8 @@ Examples create SQLite database files in the project root:
 - `second-example.db` - Secondary database for driver switching demo
 - `load-test.db` - Database for load testing (can be large)
 - `extreme-load-test.db` - Database for extreme load testing (very large)
+- `cleanup-example.db` - Database for cleanup functionality demo
+- `auto-cleanup-*.db` - Databases for auto-cleanup examples
+- `retry-*.db` - Databases for retry functionality examples
 
 These files will be created automatically when you run the examples. Load test databases can be quite large, so make sure you have sufficient disk space.

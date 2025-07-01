@@ -123,6 +123,53 @@ export interface Driver {
   cleanupOldJobs(olderThanDays?: number): Promise<number>;
 
   /**
+   * Remove old completed jobs from the database.
+   * @param olderThanDays - Remove jobs older than this many days (default: 7)
+   * @returns Promise resolving to the number of jobs removed
+   */
+  cleanupCompletedJobs(olderThanDays?: number): Promise<number>;
+
+  /**
+   * Remove both old completed and cancelled jobs from the database.
+   * @param completedOlderThanDays - Remove completed jobs older than this many days (default: 7)
+   * @param cancelledOlderThanDays - Remove cancelled jobs older than this many days (default: 30)
+   * @returns Promise resolving to object with counts of removed jobs
+   */
+  cleanupAllOldJobs(
+    completedOlderThanDays?: number,
+    cancelledOlderThanDays?: number
+  ): Promise<{ completed: number; cancelled: number }>;
+
+  /**
+   * Manually trigger auto-cleanup with current settings.
+   * @returns Promise resolving to object with counts of removed jobs
+   */
+  triggerAutoCleanup(): Promise<{ completed: number; cancelled: number }>;
+
+  /**
+   * Get auto-cleanup configuration and status.
+   * @returns Object containing auto-cleanup settings and current status
+   */
+  getAutoCleanupStatus(): {
+    enabled: boolean;
+    interval: number;
+    completedJobsRetentionDays: number;
+    cancelledJobsRetentionDays: number;
+    isRunning: boolean;
+  };
+
+  /**
+   * Get retry configuration and error handling status.
+   * @returns Object containing retry settings and error handler status
+   */
+  getRetryConfig(): {
+    maxAttempts: number;
+    baseDelay: number;
+    maxDelay: number;
+    hasErrorHandler: boolean;
+  };
+
+  /**
    * Start the cron service and begin processing jobs.
    * This method should be called to begin automatic job execution.
    */
