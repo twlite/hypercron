@@ -273,8 +273,6 @@ const service = new CronService(driver);
 await service.start();
 ```
 
-````
-
 ### Custom Configuration
 
 ```typescript
@@ -293,7 +291,7 @@ const customService = new CronService(driver);
 
 // Initialize and start
 await customService.start();
-````
+```
 
 ## API Reference
 
