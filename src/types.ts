@@ -22,6 +22,22 @@ export interface CronJob {
   created_at: number;
   /** Last update timestamp in milliseconds */
   updated_at: number;
+  /** Persistent data associated with the job (JSON string) */
+  data: string | null;
+}
+
+/**
+ * Context object passed to job handlers containing execution information and persistent data.
+ */
+export interface CronContext {
+  /** Persistent data associated with the job */
+  data: any;
+  /** Timestamp when the job is scheduled to run */
+  timestamp: number;
+  /** Job identifier */
+  identifier: string;
+  /** Current run count */
+  runCount: number;
 }
 
 /**
@@ -63,8 +79,9 @@ export interface CronServiceConfig {
 /**
  * Function type for job execution handlers.
  * Should be async and handle any errors internally.
+ * Receives a context object with data and execution information.
  */
-export type CronHandler = () => Promise<void> | void;
+export type CronHandler = (ctx: CronContext) => Promise<void> | void;
 
 /**
  * Valid input types for job scheduling.

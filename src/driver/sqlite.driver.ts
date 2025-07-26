@@ -118,6 +118,7 @@ export class SqliteDriver implements Driver {
         run_count INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        data TEXT,
         CONSTRAINT check_schedule_type CHECK (
           (cron_expression IS NOT NULL AND specific_time IS NULL) OR
           (cron_expression IS NULL AND specific_time IS NOT NULL)
@@ -212,7 +213,8 @@ export class SqliteDriver implements Driver {
   public async schedule(
     scheduleInput: ScheduleInput,
     identifier: string,
-    handler: CronHandler
+    handler: CronHandler,
+    data?: any
   ): Promise<string> {
     await this.ensureDatabase();
 
@@ -223,10 +225,12 @@ export class SqliteDriver implements Driver {
 
     this.handlers.set(identifier, handler);
 
+    const dataJson = data !== undefined ? JSON.stringify(data) : null;
+
     const stmt = this.db.prepare(/* sql */ `
       INSERT OR REPLACE INTO cron_jobs 
-      (id, cron_expression, specific_time, identifier, status, next_run, last_run, run_count, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, cron_expression, specific_time, identifier, status, next_run, last_run, run_count, created_at, updated_at, data)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -239,7 +243,8 @@ export class SqliteDriver implements Driver {
       null,
       0,
       now,
-      now
+      now,
+      dataJson
     );
 
     if (nextRun <= Date.now() + this.lookAheadWindow) {
@@ -422,6 +427,39 @@ export class SqliteDriver implements Driver {
     }
 
     return stats;
+  }
+
+  public async updateJobData(identifier: string, data: any): Promise<boolean> {
+    await this.ensureDatabase();
+
+    const dataJson = JSON.stringify(data);
+    const stmt = this.db.prepare(/* sql */ `
+      UPDATE cron_jobs 
+      SET data = ?, updated_at = ? 
+      WHERE identifier = ?
+    `);
+    const result = stmt.run(dataJson, Date.now(), identifier);
+
+    return result.changes > 0;
+  }
+
+  public async getJobData(identifier: string): Promise<any> {
+    await this.ensureDatabase();
+
+    const stmt = this.db.prepare(/* sql */ `
+      SELECT data FROM cron_jobs WHERE identifier = ?
+    `);
+    const result = stmt.get(identifier) as { data: string | null } | undefined;
+
+    if (!result || result.data === null) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(result.data);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -615,12 +653,44 @@ export class SqliteDriver implements Driver {
       return;
     }
 
+    // Get job data from database
+    const stmt = this.db.prepare(/* sql */ `
+      SELECT cron_expression, specific_time, run_count, data FROM cron_jobs 
+      WHERE identifier = ? AND status = 'active'
+    `);
+    const job = stmt.get(identifier) as
+      | {
+          cron_expression: string | null;
+          specific_time: number | null;
+          run_count: number;
+          data: string | null;
+        }
+      | undefined;
+
+    if (!job) {
+      return;
+    }
+
+    // Parse job data
+    const jobData = job.data ? JSON.parse(job.data) : null;
+    const executionTime = job.cron_expression
+      ? this.calculateNextRun(job.cron_expression)
+      : job.specific_time || Date.now();
+
+    // Create context object
+    const ctx = {
+      data: jobData,
+      timestamp: executionTime,
+      identifier,
+      runCount: job.run_count,
+    };
+
     let lastError: Error | null = null;
 
     // Try to execute the job with retries
     for (let attempt = 1; attempt <= this.maxRetryAttempts; attempt++) {
       try {
-        await handler();
+        await handler(ctx);
         lastError = null;
         break; // Success, exit retry loop
       } catch (error) {
@@ -655,53 +725,33 @@ export class SqliteDriver implements Driver {
     }
 
     // Update job status regardless of success/failure
-    const stmt = this.db.prepare(/* sql */ `
-      SELECT cron_expression, specific_time, run_count FROM cron_jobs 
-      WHERE identifier = ? AND status = 'active'
+    const updateStmt = this.db.prepare(/* sql */ `
+      UPDATE cron_jobs 
+      SET last_run = ?, next_run = ?, run_count = ?, status = ?, updated_at = ?
+      WHERE identifier = ?
     `);
-    const job = stmt.get(identifier) as
-      | {
-          cron_expression: string | null;
-          specific_time: number | null;
-          run_count: number;
-        }
-      | undefined;
 
-    if (job) {
-      const now = Date.now();
-      let nextRun: number | null = null;
-      let newStatus = 'active';
+    const now = Date.now();
+    let nextRun: number | null = null;
+    let newStatus = 'active';
 
-      if (job.cron_expression) {
-        nextRun = this.calculateNextRun(job.cron_expression);
-      } else if (job.specific_time) {
-        newStatus = 'completed';
-        nextRun = job.specific_time;
-      }
+    if (job.cron_expression) {
+      nextRun = this.calculateNextRun(job.cron_expression);
+    } else if (job.specific_time) {
+      newStatus = 'completed';
+      nextRun = job.specific_time;
+    }
 
-      const updateStmt = this.db.prepare(/* sql */ `
-        UPDATE cron_jobs 
-        SET last_run = ?, next_run = ?, run_count = ?, status = ?, updated_at = ?
-        WHERE identifier = ?
-      `);
-      updateStmt.run(
-        now,
-        nextRun,
-        job.run_count + 1,
-        newStatus,
-        now,
-        identifier
-      );
+    updateStmt.run(now, nextRun, job.run_count + 1, newStatus, now, identifier);
 
-      if (
-        job.cron_expression &&
-        nextRun &&
-        nextRun <= Date.now() + this.lookAheadWindow
-      ) {
-        this.scheduleJobExecution(identifier, nextRun);
-      } else {
-        this.activeJobs.delete(identifier);
-      }
+    if (
+      job.cron_expression &&
+      nextRun &&
+      nextRun <= Date.now() + this.lookAheadWindow
+    ) {
+      this.scheduleJobExecution(identifier, nextRun);
+    } else {
+      this.activeJobs.delete(identifier);
     }
   }
 

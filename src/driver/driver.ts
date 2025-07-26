@@ -27,12 +27,14 @@ export interface Driver {
    * @param scheduleInput - Cron expression, timestamp, or Date object
    * @param identifier - Unique identifier for the job
    * @param handler - Function to execute when the job runs
+   * @param data - Optional persistent data to associate with the job
    * @returns Promise resolving to the job ID
    */
   schedule(
     scheduleInput: ScheduleInput,
     identifier: string,
-    handler: CronHandler
+    handler: CronHandler,
+    data?: any
   ): Promise<string>;
 
   /**
@@ -114,6 +116,21 @@ export interface Driver {
     completed: number;
     totalRuns: number;
   }>;
+
+  /**
+   * Update the persistent data associated with a job.
+   * @param identifier - Unique identifier of the job
+   * @param data - New data to associate with the job
+   * @returns Promise resolving to true if job was updated, false if not found
+   */
+  updateJobData(identifier: string, data: any): Promise<boolean>;
+
+  /**
+   * Get the persistent data associated with a job.
+   * @param identifier - Unique identifier of the job
+   * @returns Promise resolving to the job data or null if not found
+   */
+  getJobData(identifier: string): Promise<any>;
 
   /**
    * Remove old cancelled jobs from the database.

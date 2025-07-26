@@ -1,4 +1,11 @@
-export { CronService, cancel, cronService, schedule } from './cron';
+export {
+  CronService,
+  cancel,
+  cronService,
+  schedule,
+  updateJobData,
+  getJobData,
+} from './cron';
 export { SqliteDriver } from './driver/sqlite.driver';
 export type { Driver } from './driver/driver';
 export type {
@@ -6,4 +13,5 @@ export type {
   CronServiceConfig,
   CronHandler,
   ScheduleInput,
+  CronContext,
 } from './types';

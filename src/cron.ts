@@ -43,15 +43,17 @@ export class CronService {
    * @param scheduleInput - Cron expression, timestamp, or Date object
    * @param identifier - Unique identifier for the job
    * @param handler - Function to execute when the job runs
+   * @param data - Optional persistent data to associate with the job
    * @returns Promise resolving to the job ID
    */
   public async schedule(
     scheduleInput: ScheduleInput,
     identifier: string,
-    handler: CronHandler
+    handler: CronHandler,
+    data?: any
   ) {
     await this.ensureDriverInitialized();
-    return this.driver.schedule(scheduleInput, identifier, handler);
+    return this.driver.schedule(scheduleInput, identifier, handler, data);
   }
 
   /**
@@ -158,6 +160,27 @@ export class CronService {
   public async getJobStats() {
     await this.ensureDriverInitialized();
     return this.driver.getJobStats();
+  }
+
+  /**
+   * Update the persistent data associated with a job.
+   * @param identifier - Unique identifier of the job
+   * @param data - New data to associate with the job
+   * @returns Promise resolving to true if job was updated, false if not found
+   */
+  public async updateJobData(identifier: string, data: any) {
+    await this.ensureDriverInitialized();
+    return this.driver.updateJobData(identifier, data);
+  }
+
+  /**
+   * Get the persistent data associated with a job.
+   * @param identifier - Unique identifier of the job
+   * @returns Promise resolving to the job data or null if not found
+   */
+  public async getJobData(identifier: string) {
+    await this.ensureDriverInitialized();
+    return this.driver.getJobData(identifier);
   }
 
   /**
@@ -275,9 +298,10 @@ export const cronService = new CronService(new SqliteDriver({ db: 'cron.db' }));
 export function schedule(
   pattern: ScheduleInput,
   identifier: string,
-  handler: CronHandler
+  handler: CronHandler,
+  data?: any
 ) {
-  return cronService.schedule(pattern, identifier, handler);
+  return cronService.schedule(pattern, identifier, handler, data);
 }
 
 /**
@@ -287,4 +311,12 @@ export function schedule(
  */
 export function cancel(identifier: string) {
   return cronService.cancel(identifier);
+}
+
+export function updateJobData(identifier: string, data: any) {
+  return cronService.updateJobData(identifier, data);
+}
+
+export function getJobData(identifier: string) {
+  return cronService.getJobData(identifier);
 }

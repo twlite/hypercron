@@ -28,9 +28,12 @@ npm i hypercron
 ```typescript
 import { schedule, cancel, cronService } from 'hypercron';
 
-// Schedule a job that runs every minute
-await schedule('* * * * *', 'my-job', async () => {
+// Schedule a job that runs every minute with persistent data
+await schedule('* * * * *', 'my-job', async (ctx) => {
   console.log('Job executed!');
+  console.log('Job data:', ctx.data);
+  console.log('Execution timestamp:', ctx.timestamp);
+  console.log('Run count:', ctx.runCount);
 });
 
 // Start the service
@@ -47,15 +50,26 @@ await cancel('my-job');
 ```typescript
 import { schedule, cronService } from 'hypercron';
 
-// Schedule with cron expression
-await schedule('0 0 * * *', 'daily-backup', async () => {
-  await performBackup();
-});
+// Schedule with cron expression and persistent data
+await schedule(
+  '0 0 * * *',
+  'daily-backup',
+  async (ctx) => {
+    console.log('Backup data:', ctx.data);
+    await performBackup();
+  },
+  { lastBackup: null, backupCount: 0 }
+);
 
-// Schedule with specific time
-await schedule(Date.now() + 60000, 'one-time-task', async () => {
-  console.log('One-time task executed!');
-});
+// Schedule with specific time and data
+await schedule(
+  Date.now() + 60000,
+  'one-time-task',
+  async (ctx) => {
+    console.log('One-time task executed with data:', ctx.data);
+  },
+  { taskType: 'cleanup', priority: 'high' }
+);
 
 // Start the service
 await cronService.start();
@@ -78,6 +92,83 @@ await cronService.cancel('daily-backup');
 // Get job status
 const job = await cronService.get('daily-backup');
 console.log(job?.status); // 'active' | 'paused' | 'cancelled' | 'completed'
+```
+
+### Persistent Data Management
+
+HyperCron supports persistent job data that survives restarts and is passed to job handlers via a context object.
+
+#### Scheduling Jobs with Data
+
+```typescript
+import { schedule } from 'hypercron';
+
+// Schedule a job with initial data
+await schedule(
+  '*/5 * * * * *',
+  'data-job',
+  async (ctx) => {
+    console.log('Job data:', ctx.data);
+    console.log('Execution timestamp:', ctx.timestamp);
+    console.log('Run count:', ctx.runCount);
+  },
+  {
+    counter: 0,
+    lastRun: null,
+    preferences: { theme: 'dark' },
+  }
+);
+```
+
+#### Updating Job Data
+
+```typescript
+import { updateJobData, getJobData } from 'hypercron';
+
+// Update job data from within the handler
+await schedule(
+  '*/10 * * * * *',
+  'accumulator',
+  async (ctx) => {
+    const data = ctx.data || { values: [], sum: 0 };
+    const newValue = Math.random();
+
+    data.values.push(newValue);
+    data.sum += newValue;
+
+    // Update the data for persistence
+    await updateJobData(ctx.identifier, data);
+  },
+  { values: [], sum: 0 }
+);
+
+// Update job data from outside
+await updateJobData('my-job', {
+  lastUpdated: new Date().toISOString(),
+  status: 'processing',
+});
+
+// Retrieve job data
+const jobData = await getJobData('my-job');
+console.log('Job data:', jobData);
+```
+
+#### Context Object
+
+The context object passed to job handlers contains:
+
+- **`data`**: The persistent data associated with the job
+- **`timestamp`**: The timestamp when the job is scheduled to run
+- **`identifier`**: The job identifier
+- **`runCount`**: The current run count of the job
+
+```typescript
+await schedule('* * * * *', 'context-example', async (ctx) => {
+  console.log('Job identifier:', ctx.identifier);
+  console.log('Scheduled time:', new Date(ctx.timestamp).toISOString());
+  console.log('This is run number:', ctx.runCount);
+  console.log('Persistent data:', ctx.data);
+});
 ```
 
 ### Monitoring and Statistics
@@ -307,7 +398,7 @@ new CronService(driver: Driver)
 
 #### Methods
 
-- `schedule(scheduleInput, identifier, handler)` - Schedule a new job
+- `schedule(scheduleInput, identifier, handler, data?)` - Schedule a new job with optional persistent data
 - `cancel(identifier)` - Cancel a job
 - `pause(identifier)` - Pause a job
 - `resume(identifier)` - Resume a job
@@ -319,6 +410,8 @@ new CronService(driver: Driver)
 - `getTotalRunsCount()` - Get total run count
 - `getJobsInWindow()` - Get jobs in execution window
 - `getJobStats()` - Get comprehensive statistics
+- `updateJobData(identifier, data)` - Update persistent data for a job
+- `getJobData(identifier)` - Get persistent data for a job
 - `cleanupOldJobs(olderThanDays?)` - Remove old cancelled jobs
 - `cleanupCompletedJobs(olderThanDays?)` - Remove old completed jobs
 - `cleanupAllOldJobs(completedOlderThanDays?, cancelledOlderThanDays?)` - Remove both old completed and cancelled jobs
@@ -363,6 +456,42 @@ All methods from the Driver interface, plus:
 - `init()` - Initialize the driver
 - `destroy()` - Clean up resources
 
+### Top-Level Functions
+
+For convenience, HyperCron provides top-level functions for common operations:
+
+```typescript
+import {
+  schedule,
+  cancel,
+  updateJobData,
+  getJobData,
+  cronService,
+} from 'hypercron';
+
+// Schedule a job with data
+await schedule(
+  '* * * * *',
+  'my-job',
+  async (ctx) => {
+    console.log('Job data:', ctx.data);
+  },
+  { counter: 0 }
+);
+
+// Cancel a job
+await cancel('my-job');
+
+// Update job data
+await updateJobData('my-job', { counter: 5 });
+
+// Get job data
+const data = await getJobData('my-job');
+
+// Start the service
+await cronService.start();
+```
+
 ### Types
 
 #### CronJob
@@ -379,13 +508,29 @@ interface CronJob {
   run_count: number;
   created_at: number;
   updated_at: number;
+  data: string | null;
 }
 ```
 
 #### CronHandler
 
 ```typescript
-type CronHandler = () => Promise<void> | void;
+type CronHandler = (ctx: CronContext) => Promise<void> | void;
+```
+
+#### CronContext
+
+```typescript
+interface CronContext {
+  /** Persistent data associated with the job */
+  data: any;
+  /** Timestamp when the job is scheduled to run */
+  timestamp: number;
+  /** Job identifier */
+  identifier: string;
+  /** Current run count */
+  runCount: number;
+}
 ```
 
 #### ScheduleInput
